@@ -1,0 +1,49 @@
+# DikteMD erisilebilirlik izleme - akdoktor-pixel/diktemd-indir deposunda
+# .github/workflows/izleme.yml olarak calisir (kaynak: relay/deploy/izleme.yml).
+# 15 dakikada bir; bir kontrol 3 denemede de basarisizsa is kirmizi olur ve
+# GitHub depo sahibine e-posta gonderir. Not: GitHub, depoda 60 gun hic
+# commit olmazsa zamanlanmis isleri durdurur (oncesinde e-postayla uyarir);
+# Actions sekmesinden "Enable workflow" ile yeniden acilir.
+name: Erisilebilirlik izleme
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  kontrol:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Servisler
+        run: |
+          set -u
+          fail=0
+          check() {  # ad, adres, yanitta olmasi gereken metin
+            for i in 1 2 3; do
+              body=$(curl -fsS --max-time 20 "$2" 2>&1) && echo "$body" | grep -q "$3" && { echo "OK   $1"; return; }
+              sleep 20
+            done
+            echo "::error::$1 YANIT VERMIYOR ($2): ${body:0:200}"
+            fail=1
+          }
+          check "Aktarici (telefon baglantisi)" https://app.diktemd.com/health "ok"
+          check "Gemini duzeltici"              https://app.diktemd.com/duzelt/health '"key": true'
+          check "Istatistik / panel"            https://app.diktemd.com/olay/health '"ok": true'
+          check "Tanitim sitesi"                https://diktemd.com/ "DikteMD"
+          check "Guncelleme bilgisi"            https://diktemd.com/latest.json '"version"'
+          exit $fail
+
+      - name: Sertifikalar (en az 14 gun)
+        run: |
+          fail=0
+          for host in app.diktemd.com diktemd.com; do
+            end=$(echo | openssl s_client -servername "$host" -connect "$host:443" 2>/dev/null | openssl x509 -noout -enddate | cut -d= -f2)
+            days=$(( ( $(date -d "$end" +%s) - $(date +%s) ) / 86400 ))
+            echo "$host: $days gun"
+            if [ "$days" -lt 14 ]; then echo "::error::$host sertifikasi $days gun icinde bitiyor"; fail=1; fi
+          done
+          exit $fail
